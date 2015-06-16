@@ -111,8 +111,8 @@ FOREACH(i in RANGE(0, length(hours)-2) |
 
 WITH *
 
-MATCH (y:Year {value: 2015})-[:CONTAINS]->(m:Month {value: 1})-[:CONTAINS]->(d:Day {value: 1})-[:CONTAINS]->(h:Hour {value: 1})-[:CONTAINS]->(minute)
-RETURN y, m, d, h, minute;
+MATCH (y:Year {value: 2015})-[:CONTAINS]->(m:Month {value: 1})-[:CONTAINS]->(d:Day {value: 1})-[:CONTAINS]->(h)
+RETURN y, m, d, h;
 ----
 
 //graph
