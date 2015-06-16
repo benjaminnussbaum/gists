@@ -19,7 +19,6 @@ This interactive Neo4j graph tutorial covers modeling time series data.
 * *Loading CSV Data*
 ** <<loading_the_csv_data, Loading the CSV Data>>
 ** <<find_account_holders_who_share_more_than_one_piece_of_legitimate_contact_information, Find account holders who share more than one piece of legitimate contact information>>
-** <<determine_the_financial_risk_of_a_possible_fraud_ring , Determine the financial risk of a possible fraud ring>>
 
 '''
 
@@ -110,6 +109,10 @@ FOREACH(i in RANGE(0, length(hours)-2) |
         FOREACH(hour2 in [hours[i+1]] | 
             CREATE UNIQUE (hour1)-[:NEXT]->(hour2))))
 
+WITH *
+
+MATCH (y:Year {value: 2015})-[:CONTAINS]->(m:Month {value: 1})-[:CONTAINS]->(d:Day {value: 1})-[:CONTAINS]->(h:Hour {value: 1})-[:CONTAINS]->(minute)
+RETURN y, m, d, h, minute;
 ----
 
 //graph
@@ -135,33 +138,6 @@ RETURN 		AccountHolders AS FraudRing,
 			labels(contactInformation) AS ContactType, 
 			RingSize
 ORDER BY 	RingSize DESC
-----
-
-//output
-//table
-
-==== Determine the financial risk of a possible fraud ring
-
-[source,cypher]
-----
-MATCH 		(accountHolder:AccountHolder)-[]->(contactInformation) 
-WITH 		contactInformation, 
-			count(accountHolder) AS RingSize 
-MATCH 		(contactInformation)<-[]-(accountHolder), 
-			(accountHolder)-[r:HAS_CREDITCARD|HAS_UNSECUREDLOAN]->(unsecuredAccount)
-WITH 		collect(DISTINCT accountHolder.UniqueId) AS AccountHolders, 
-			contactInformation, RingSize,
-			SUM(CASE type(r)
-				WHEN 'HAS_CREDITCARD' THEN unsecuredAccount.Limit
-				WHEN 'HAS_UNSECUREDLOAN' THEN unsecuredAccount.Balance
-				ELSE 0
-			END) as FinancialRisk
-WHERE 		RingSize > 1
-RETURN 		AccountHolders AS FraudRing, 
-			labels(contactInformation) AS ContactType, 
-			RingSize, 
-			round(FinancialRisk) as FinancialRisk
-ORDER BY 	FinancialRisk DESC
 ----
 
 //output
