@@ -1,0 +1,168 @@
+= Modeling Time Series Data
+:neo4j-version: 2.2.2
+:author: Benjamin Nussbaum
+:twitter: @bennussbaum
+:tags: domain:, use-case:
+
+This interactive Neo4j graph tutorial covers modeling time series data.
+
+'''
+
+*Table of Contents*
+
+* *Background*
+** <<first_some_background, First Some Background>>
+* *Data Preparation*
+** <<next_the_data_preparation, Next the Data Preparation>>
+* *Time Tree*
+** <<originating_the_time_tree, Originating the Time Tree>>
+* *Loading CSV Data*
+** <<loading_the_csv_data, Loading the CSV Data>>
+** <<find_account_holders_who_share_more_than_one_piece_of_legitimate_contact_information, Find account holders who share more than one piece of legitimate contact information>>
+** <<determine_the_financial_risk_of_a_possible_fraud_ring , Determine the financial risk of a possible fraud ring>>
+
+'''
+
+== First Some Background
+
+There has been an open data movement in government the last couple years that has been gaining momentum so I began searching http://www.data.gov and looking for other cities that have data portals. I discovered the city of Seattle has a data portal at https://data.seattle.gov/, which had a useful, large time-series dataset containing all 911 fire calls received since 2010. There were about 400k entries in the CSV containing an Address, Latitude, Longitude, Incident Type, Incident Number and Date+Time. 
+
+'''
+
+== Next the Data Preparation
+
+I needed to a do a couple things to get the data into a more friendly and complete state for loading into Neo4j.
+1. I removed all spaces from the column names.
+2. I wanted a millisecond timestamp associated with each row in addition to the long UTC text format so I ran a process to insert a second time column that converted the Datetime string value to milliseconds and placed that value in the new DatetimeMS column.
+
+== Originating the Time Tree
+
+I expaned on the work done by Mark Needham in his post <a href="http://www.markhneedham.com/blog/2014/04/19/neo4j-cypher-creating-a-time-tree-down-to-the-day/">Neo4j: Cypher – Creating a time tree down to the day</a>
+
+The main changes were the following:
+1. I chose to use a single CONTAINS relationship going from the higher tree toward the lower tree level to simplify movement up and down the entire tree through the use of depth-based pattern matching.
+2. I added hour and minute levels to the time tree.
+3. I created NEXT relationships at month, day, hour and minute levels to enable rapid sequential movement at any level in the time tree instead of only the lowest.
+
+A couple steps are required to setup the time tree with minute level precision.
+First I needed to create the time tree and next connections down through the hour depth
+
+'''
+
+//setup
+[source,cypher]
+----
+
+// Create Time Tree with Hour Depth
+WITH range(2010, 2015) AS years, range(1,12) as months, range(1,24) as hours, range(1,60) as minuteseconds
+FOREACH(year IN years | 
+  MERGE (y:Year {value: year})
+  FOREACH(month IN months | 
+    CREATE (m:Month {value: month})
+    MERGE (y)-[:CONTAINS]->(m)
+    FOREACH(day IN (CASE 
+                      WHEN month IN [1,3,5,7,8,10,12] THEN range(1,31) 
+                      WHEN month = 2 THEN 
+                        CASE
+                          WHEN year % 4 <> 0 THEN range(1,28)
+                          WHEN year % 100 <> 0 THEN range(1,29)
+                          WHEN year % 400 <> 0 THEN range(1,29)
+                          ELSE range(1,28)
+                        END
+                      ELSE range(1,30)
+                    END) |      
+      CREATE (d:Day {value: day})
+      MERGE (m)-[:CONTAINS]->(d)
+	    FOREACH(hour IN hours | 
+		  CREATE (h:Hour {value: hour})
+		  MERGE (d)-[:CONTAINS]->(h)))))
+
+WITH *
+
+MATCH (year:Year)-[:CONTAINS]->(month)
+WITH year,month
+ORDER BY year.value, month.value
+WITH collect(month) as months
+FOREACH(i in RANGE(0, length(months)-2) | 
+    FOREACH(month1 in [months[i]] | 
+        FOREACH(month2 in [months[i+1]] | 
+            CREATE UNIQUE (month1)-[:NEXT]->(month2))))
+
+WITH *
+
+MATCH (year:Year)-[:CONTAINS]->(month)-[:CONTAINS]->(day)
+WITH year,month,day
+ORDER BY year.value, month.value, day.value
+WITH collect(day) as days
+FOREACH(i in RANGE(0, length(days)-2) | 
+    FOREACH(day1 in [days[i]] | 
+        FOREACH(day2 in [days[i+1]] | 
+            CREATE UNIQUE (day1)-[:NEXT]->(day2))))
+
+WITH *
+
+MATCH (year:Year)-[:CONTAINS]->(month)-[:CONTAINS]->(day)-[:CONTAINS]->(hour)
+WITH year,month,day,hour
+ORDER BY year.value, month.value, day.value, hour.value
+WITH collect(hour) as hours
+FOREACH(i in RANGE(0, length(hours)-2) | 
+    FOREACH(hour1 in [hours[i]] | 
+        FOREACH(hour2 in [hours[i+1]] | 
+            CREATE UNIQUE (hour1)-[:NEXT]->(hour2))))
+
+----
+
+//graph
+
+'''
+
+== Loading the CSV Data
+
+Michael Hunger has some very useful tips on using LOAD CSV with Cyhper in his post <a href="http://jexp.github.io/blog/html/load_csv_tips.html">LOAD CSV into Neo4j quickly and successfully</a>, which is a worthwile read before you begin importing your own CSV data.
+
+==== Find account holders who share more than one piece of legitimate contact information
+
+[source,cypher]
+----
+MATCH 		(accountHolder:AccountHolder)-[]->(contactInformation) 
+WITH 		contactInformation, 
+			count(accountHolder) AS RingSize 
+MATCH 		(contactInformation)<-[]-(accountHolder) 
+WITH 		collect(accountHolder.UniqueId) AS AccountHolders, 
+			contactInformation, RingSize
+WHERE 		RingSize > 1 
+RETURN 		AccountHolders AS FraudRing, 
+			labels(contactInformation) AS ContactType, 
+			RingSize
+ORDER BY 	RingSize DESC
+----
+
+//output
+//table
+
+==== Determine the financial risk of a possible fraud ring
+
+[source,cypher]
+----
+MATCH 		(accountHolder:AccountHolder)-[]->(contactInformation) 
+WITH 		contactInformation, 
+			count(accountHolder) AS RingSize 
+MATCH 		(contactInformation)<-[]-(accountHolder), 
+			(accountHolder)-[r:HAS_CREDITCARD|HAS_UNSECUREDLOAN]->(unsecuredAccount)
+WITH 		collect(DISTINCT accountHolder.UniqueId) AS AccountHolders, 
+			contactInformation, RingSize,
+			SUM(CASE type(r)
+				WHEN 'HAS_CREDITCARD' THEN unsecuredAccount.Limit
+				WHEN 'HAS_UNSECUREDLOAN' THEN unsecuredAccount.Balance
+				ELSE 0
+			END) as FinancialRisk
+WHERE 		RingSize > 1
+RETURN 		AccountHolders AS FraudRing, 
+			labels(contactInformation) AS ContactType, 
+			RingSize, 
+			round(FinancialRisk) as FinancialRisk
+ORDER BY 	FinancialRisk DESC
+----
+
+//output
+//table
